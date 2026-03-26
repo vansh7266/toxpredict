@@ -21,6 +21,8 @@ data/*.gz
 # Saved model weights — can be large
 models/*.pkl
 models/*.pt
+!models/attentivefp.pt
+
 models/*.pth
 models/*.joblib
 
