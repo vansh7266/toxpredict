@@ -28,7 +28,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch_geometric.data import Data, DataLoader
+from torch_geometric.loader import DataLoader
 from torch_geometric.nn import AttentiveFP
 
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
@@ -76,14 +76,14 @@ class ToxAttentiveFP(nn.Module):
       1. Atom-level: each atom attends to its neighbours
       2. Molecule-level: a GRU pools atom representations into one vector
 
-    The attention weights at the atom level are what we later extract
-    to highlight 'which atoms matter most' for a given prediction.
+    We later derive per-atom importance scores from this backbone to
+    highlight which atoms matter most for a given prediction.
 
     Args:
-        in_channels:      atom feature dim (44)
+        in_channels:      atom feature dim (40)
         hidden_channels:  internal representation size (200)
         out_channels:     number of tasks (12)
-        edge_dim:         bond feature dim (11)
+        edge_dim:         bond feature dim (12)
         num_layers:       graph attention layers (6)
         num_timesteps:    GRU readout timesteps (2)
         dropout:          dropout rate (0.2)
@@ -130,14 +130,11 @@ class ToxAttentiveFP(nn.Module):
 
     def get_attention_weights(self, x, edge_index, edge_attr, batch):
         """
-        Extract per-atom attention weights from the backbone.
-        Used after training to build atom-level heatmaps.
-        Returns the backbone's alpha values (attention coefficients).
+        Legacy helper retained for compatibility with older notebooks.
+        The API now uses gradient-based atom saliency instead.
         """
-        # AttentiveFP stores attention alphas internally during forward
-        # We access them via the backbone's graph_conv layers
         mol_embed = self.backbone(x, edge_index, edge_attr, batch)
-        return mol_embed   # caller uses registered hooks if needed
+        return mol_embed
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -340,21 +337,19 @@ def evaluate_test(
 # ATOM ATTENTION EXTRACTOR  (used by FastAPI for heatmaps)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@torch.no_grad()
 def get_atom_attention(
     smiles: str,
     model:  ToxAttentiveFP,
     device: torch.device,
 ) -> List[float]:
     """
-    Extract per-atom attention weights for a single molecule.
+    Estimate per-atom importance weights for a single molecule.
 
-    AttentiveFP computes atom-level attention during forward pass via
-    registered hooks on the graph_conv layers. We capture the final
-    layer's attention coefficients and aggregate them per atom.
-
-    Returns a list of floats (one per atom) normalised to [0, 1].
-    Higher = that atom contributed more to the prediction.
+    PyG's AttentiveFP module does not expose atom attention coefficients in a
+    stable public API during inference, so we use gradient-based saliency on
+    the most activated assay head instead. The returned values still drive the
+    frontend heatmap, but now vary meaningfully per atom instead of falling
+    back to a uniform mask.
     """
     from features import smiles_to_graph
 
@@ -362,65 +357,37 @@ def get_atom_attention(
     if data is None:
         return []
 
-    data = data.to(device)
+    x = data.x.to(device).clone().detach().requires_grad_(True)
+    edge_index = data.edge_index.to(device)
+    edge_attr = data.edge_attr.to(device)
+    batch = torch.zeros(data.num_nodes, dtype=torch.long, device=device)
 
-    # Capture attention alphas via forward hook on backbone
-    attention_weights = []
-
-    def _hook(module, input, output):
-        # AttentiveFP's GATConv returns (out, alpha) when return_attention_weights=True
-        # We hook the conv layer to grab alpha
-        if isinstance(output, tuple) and len(output) == 2:
-            attention_weights.append(output[1][1].detach().cpu())
-
-    # Register hooks on all GATConv layers inside AttentiveFP backbone
-    hooks = []
-    for name, module in model.backbone.named_modules():
-        if "conv" in name.lower() and hasattr(module, "forward"):
-            hooks.append(module.register_forward_hook(_hook))
-
+    was_training = model.training
     model.eval()
-    _ = model(
-        data.x,
-        data.edge_index,
-        data.edge_attr,
-        torch.zeros(data.num_nodes, dtype=torch.long, device=device),
-    )
+    model.zero_grad(set_to_none=True)
 
-    # Remove hooks
-    for h in hooks:
-        h.remove()
+    with torch.enable_grad():
+        logits = model(x, edge_index, edge_attr, batch)
+        target_idx = int(torch.argmax(logits, dim=1).item())
+        logits[0, target_idx].backward()
 
-    if not attention_weights:
-        # Fallback: return uniform weights
+    grads = x.grad
+    model.zero_grad(set_to_none=True)
+    if was_training:
+        model.train()
+
+    if grads is None:
         return [1.0 / data.num_nodes] * data.num_nodes
 
-    # Aggregate: for each atom, take the mean attention across all edges
-    # pointing to it across all captured layers
-    n_atoms     = data.num_nodes
-    atom_scores = np.zeros(n_atoms, dtype=np.float32)
-    counts      = np.zeros(n_atoms, dtype=np.float32)
+    atom_scores = (grads.detach().abs() * x.detach().abs()).sum(dim=1).cpu().numpy()
+    atom_scores = np.nan_to_num(atom_scores, nan=0.0, posinf=0.0, neginf=0.0)
 
-    for alpha in attention_weights:
-        alpha_np = alpha.numpy().flatten()
-        edge_dst = data.edge_index[1].cpu().numpy()
+    max_score = float(atom_scores.max()) if len(atom_scores) else 0.0
+    if max_score <= 0:
+        return [1.0 / data.num_nodes] * data.num_nodes
 
-        for edge_i, atom_j in enumerate(edge_dst):
-            if edge_i < len(alpha_np):
-                atom_scores[atom_j] += alpha_np[edge_i]
-                counts[atom_j]      += 1
-
-    counts    = np.where(counts == 0, 1, counts)
-    atom_scores = atom_scores / counts
-
-    # Normalise to [0, 1]
-    mn, mx = atom_scores.min(), atom_scores.max()
-    if mx > mn:
-        atom_scores = (atom_scores - mn) / (mx - mn)
-    else:
-        atom_scores = np.ones(n_atoms, dtype=np.float32) / n_atoms
-
-    return atom_scores.tolist()
+    atom_scores = atom_scores / max_score
+    return atom_scores.astype(np.float32).tolist()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -7,7 +7,7 @@
 
 ## What it does
 
-ToxPredict takes a **SMILES string** (a text representation of any chemical compound) and predicts its toxicity probability across **12 biological assay targets** from the Tox21 dataset. It tells you *which molecular features* are driving the toxicity risk using SHAP values, and highlights *which atoms* on the molecule are responsible using GNN attention weights.
+ToxPredict takes a **SMILES string** (a text representation of any chemical compound) and predicts its toxicity probability across **12 biological assay targets** from the Tox21 dataset. It tells you *which molecular features* are driving the toxicity risk using SHAP values, and highlights *which atoms* on the molecule are responsible using GNN-derived atom importance weights.
 
 ---
 
@@ -17,7 +17,7 @@ ToxPredict takes a **SMILES string** (a text representation of any chemical comp
 |---|---|
 | ML — Baseline | XGBoost + Morgan Fingerprints + RDKit descriptors |
 | ML — Primary | AttentiveFP GNN (PyTorch Geometric) |
-| Explainability | SHAP TreeExplainer + atom attention weights |
+| Explainability | SHAP TreeExplainer + atom importance weights |
 | Backend | FastAPI (Python) |
 | Frontend | HTML / CSS / JavaScript (single file) |
 | Deployment | Render.com (API) + Netlify (frontend) |

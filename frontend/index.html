@@ -45,6 +45,7 @@
   --font-title:'Orbitron',monospace;
   --font-body:'Rajdhani',sans-serif;
   --font-mono:'JetBrains Mono',monospace;
+  --ease-out:cubic-bezier(.22,1,.36,1);
 
   --r:10px;
   --r2:16px;
@@ -414,7 +415,10 @@ nav::after{
 .ac-name{font-size:13px;color:white/*var(--text2)*/;font-weight:500;margin-bottom:14px;}
 .prob-row{display:flex;align-items:center;gap:10px;}
 .prob-bg{flex:1;height:5px;background:#0d1430;border-radius:3px;overflow:hidden;}
-.prob-fill{height:100%;border-radius:3px;transition:width .9s cubic-bezier(.25,.8,.25,1);}
+.prob-fill{
+  height:100%;border-radius:3px;width:0;
+  transition:width 1s var(--ease-out),box-shadow .25s ease,filter .25s ease;
+}
 .ac.toxic .prob-fill{background:linear-gradient(90deg,#b44bff,#ff2d78);box-shadow:0 0 6px var(--toxic);}
 .ac.medium .prob-fill{background:linear-gradient(90deg,#ff2d78,#ff9f1c);}
 .ac.safe .prob-fill{background:linear-gradient(90deg,#00f5ff,#39ff14);box-shadow:0 0 6px var(--safe);}
@@ -540,7 +544,12 @@ nav::after{
   text-align:center;font-family:var(--font-mono);font-size:12px;
 }
 .auc-bw{display:flex;align-items:center;gap:6px;justify-content:center;}
-.auc-mb{height:4px;border-radius:2px;}
+.auc-mb{
+  height:4px;border-radius:999px;width:0;
+  transition:width .95s var(--ease-out),box-shadow .3s ease;
+}
+.cmp-ready .auc-mb{width:var(--bar-w);}
+.auc-mb.is-best{box-shadow:0 0 12px #00f5ff45;}
 .best{
   background:var(--g1);-webkit-background-clip:text;-webkit-text-fill-color:transparent;
   font-weight:700;
@@ -627,6 +636,11 @@ footer::before{
   to{opacity:1;transform:none;}
 }
 .fu{animation:fadeUp .5s ease forwards;}
+@keyframes fadeScale{
+  from{opacity:0;transform:translateY(18px) scale(.985);}
+  to{opacity:1;transform:none;}
+}
+.reveal{animation:fadeScale .72s var(--ease-out) forwards;}
 @keyframes pulse-glow{
   0%,100%{box-shadow:0 0 20px #00f5ff20;}
   50%{box-shadow:0 0 40px #00f5ff40,0 0 80px #b44bff20;}
@@ -872,6 +886,95 @@ footer::before{
 
 <script>
 const API = 'http://localhost:8000';
+const CHART_EASE = 'easeOutQuart';
+
+function retriggerAnimation(el, cls='reveal', delay=0){
+  if(!el) return;
+  el.classList.remove('fu');
+  el.classList.remove('reveal');
+  void el.offsetWidth;
+  el.style.animationDelay = `${delay}ms`;
+  el.classList.add(cls);
+}
+
+function animateWidths(nodes, step=55){
+  requestAnimationFrame(()=>{
+    nodes.forEach((node,index)=>{
+      const target=node.dataset.width;
+      if(target==null) return;
+      node.style.transitionDelay = `${index*step}ms`;
+      node.style.width = `${target}%`;
+    });
+  });
+}
+
+function chartDelay(ctx, step=45, datasetGap=140){
+  if(ctx.type!=='data') return 0;
+  return ctx.dataIndex*step + ctx.datasetIndex*datasetGap;
+}
+
+function animateComparisonBars(){
+  const wrap=document.getElementById('cmp-wrap');
+  if(!wrap) return;
+  wrap.classList.remove('cmp-ready');
+  void wrap.offsetWidth;
+  requestAnimationFrame(()=>wrap.classList.add('cmp-ready'));
+}
+
+const sectionState = {
+  stats:false,
+  compare:false,
+  training:false,
+};
+
+function loadSectionOnce(key){
+  if(sectionState[key]) return;
+  sectionState[key] = true;
+
+  if(key==='stats'){
+    retriggerAnimation(document.querySelector('#stats .stats-card'), 'reveal');
+    loadDatasetStats();
+  }
+  if(key==='compare'){
+    retriggerAnimation(document.querySelector('#compare .cmp-card'), 'reveal');
+    loadModelResults();
+  }
+  if(key==='training'){
+    retriggerAnimation(document.querySelector('#training .curve-card'), 'reveal');
+    loadTrainingCurve();
+  }
+}
+
+function initSectionObservers(){
+  const sectionMap = [
+    {id:'stats', key:'stats'},
+    {id:'compare', key:'compare'},
+    {id:'training', key:'training'},
+  ];
+
+  if(!('IntersectionObserver' in window)){
+    sectionMap.forEach(({key})=>loadSectionOnce(key));
+    return;
+  }
+
+  const observer = new IntersectionObserver((entries)=>{
+    entries.forEach(entry=>{
+      if(!entry.isIntersecting) return;
+      const match = sectionMap.find(item=>item.id===entry.target.id);
+      if(!match) return;
+      loadSectionOnce(match.key);
+      observer.unobserve(entry.target);
+    });
+  }, {
+    threshold:0.28,
+    rootMargin:'0px 0px -8% 0px',
+  });
+
+  sectionMap.forEach(({id})=>{
+    const el = document.getElementById(id);
+    if(el) observer.observe(el);
+  });
+}
 
 // ── SMILES DRAWER (2D) ───────────────────────────────────────────────────────
 let sd2d = null;
@@ -1115,9 +1218,7 @@ window.addEventListener('load', ()=>{
     heroEl.style.height='100%';
     load3DViewer('CN1C=NC2=C1C(=O)N(C(=O)N2C)C', 'hero-3d-viewer');
   }
-  loadDatasetStats();
-  loadModelResults();
-  loadTrainingCurve();
+  initSectionObservers();
 });
 
 // ── SWITCH 2D / 3D VIEW ───────────────────────────────────────────────────────
@@ -1182,11 +1283,12 @@ function renderResults(data, model){
   // Assay cards
   const grid=document.getElementById('assay-grid');
   grid.innerHTML='';
-  data.assay_results.forEach(r=>{
+  data.assay_results.forEach((r,index)=>{
     const cls = r.risk_level==='high'?'toxic':r.risk_level==='medium'?'medium':'safe';
     const pct = Math.round(r.probability*100);
     const card=document.createElement('div');
     card.className=`ac ${cls} fu`;
+    card.style.animationDelay=`${index*55}ms`;
     card.innerHTML=`
       <div class="ac-top">
         <div>
@@ -1197,10 +1299,17 @@ function renderResults(data, model){
       </div>
       <div class="ac-name">${r.name}</div>
       <div class="prob-row">
-        <div class="prob-bg"><div class="prob-fill" style="width:${pct}%"></div></div>
+        <div class="prob-bg"><div class="prob-fill" data-width="${pct}"></div></div>
         <div class="prob-num">${pct}%</div>
       </div>`;
     grid.appendChild(card);
+  });
+  animateWidths([...grid.querySelectorAll('.prob-fill')]);
+
+  retriggerAnimation(document.getElementById('r-summary'));
+  retriggerAnimation(document.getElementById('heatmap-panel'), 'reveal', 90);
+  document.querySelectorAll('#visualize .viz-panel').forEach((panel,index)=>{
+    retriggerAnimation(panel, 'reveal', 140 + index*80);
   });
 
   // 2D molecule
@@ -1212,7 +1321,7 @@ function renderResults(data, model){
     topAssay?`${topAssay.task} (${(topAssay.probability*100).toFixed(1)}%)` :'—';
 
   if(model==='gnn'&&data.atom_attention&&data.atom_attention.length>0){
-    document.getElementById('hm-sub').textContent='GNN atom-level attention weights';
+    document.getElementById('hm-sub').textContent='GNN atom-level importance weights';
     drawHeatmap(data.smiles, data.atom_attention.map(a=>a.weight));
   } else {
     // XGBoost: mock weights scaled by probability
@@ -1331,6 +1440,11 @@ function renderSHAP(shapData){
     data:{labels,datasets:[{data:vals,backgroundColor:colors,borderWidth:0,borderRadius:4}]},
     options:{
       indexAxis:'y',responsive:true,
+      animation:{
+        duration:950,
+        easing:CHART_EASE,
+        delay:ctx=>chartDelay(ctx,70,0),
+      },
       plugins:{
         legend:{display:false},
         tooltip:{callbacks:{label:c=>` SHAP: ${c.raw.toFixed(4)}`}}
@@ -1362,6 +1476,11 @@ async function loadDatasetStats(){
       ]},
       options:{
         responsive:true,
+        animation:{
+          duration:1000,
+          easing:CHART_EASE,
+          delay:ctx=>chartDelay(ctx,50,160),
+        },
         plugins:{legend:{labels:{color:'#7a8ab8',font:{family:'Rajdhani',size:11},boxWidth:12}}},
         scales:{
           x:{grid:{color:'#111830'},ticks:{color:'#7a8ab8',font:{family:'JetBrains Mono',size:10}}},
@@ -1393,8 +1512,10 @@ async function loadModelResults(){
       const [xBA,gBA]=bw(x.roc_auc,g.roc_auc);
       if(x.roc_auc!=null){xSum+=x.roc_auc;xC++;}
       if(g.roc_auc!=null){gSum+=g.roc_auc;gC++;}
-      const bar=v=>v!=null?`<div class="auc-mb" style="width:${Math.round(v*70)}px;background:${xBA||gBA?'linear-gradient(90deg,var(--c1),var(--c2))':'var(--border2)'}"></div>`:'';
-      const cell=(v,best)=>`<td class="auc-c"><div class="auc-bw">${bar(v)}<span class="${best?'best':v==null?'na-v':''}">${fmt(v)}</span></div></td>`;
+      const bar=(v,best)=>v!=null
+        ? `<div class="auc-mb ${best?'is-best':''}" style="--bar-w:${Math.round(v*70)}px;background:${best?'linear-gradient(90deg,var(--c1),var(--c2))':'var(--border2)'}"></div>`
+        : '';
+      const cell=(v,best)=>`<td class="auc-c"><div class="auc-bw">${bar(v,best)}<span class="${best?'best':v==null?'na-v':''}">${fmt(v)}</span></div></td>`;
       html+=`<tr><td>${t}</td>${cell(x.roc_auc,xBA)}${cell(g.roc_auc,gBA)}
         ${cell(x.auprc,x.auprc>=(g.auprc||0))}${cell(g.auprc,g.auprc>(x.auprc||0))}
         ${cell(x.f1,x.f1>=(g.f1||0))}${cell(g.f1,g.f1>(x.f1||0))}</tr>`;
@@ -1410,6 +1531,7 @@ async function loadModelResults(){
     html+='</tbody></table>';
     document.getElementById('cmp-wrap').innerHTML=html;
     document.getElementById('compare-na')&&(document.getElementById('compare-na').style.display='none');
+    animateComparisonBars();
   }catch(e){console.warn('model results:',e.message);}
 }
 
@@ -1436,6 +1558,11 @@ async function loadTrainingCurve(){
       },
       options:{
         responsive:true,
+        animation:{
+          duration:1200,
+          easing:CHART_EASE,
+          delay:ctx=>chartDelay(ctx,12,170),
+        },
         interaction:{mode:'index',intersect:false},
         plugins:{legend:{labels:{color:'#7a8ab8',font:{family:'Rajdhani',size:11},boxWidth:14}}},
         scales:{
@@ -1483,9 +1610,11 @@ function renderBatch(data){
   document.getElementById('batch-sum').textContent=`${data.valid} predicted · ${data.invalid} failed · ${data.total} total`;
   const tbody=document.getElementById('batch-body');
   tbody.innerHTML='';
-  data.results.forEach(r=>{
+  data.results.forEach((r,index)=>{
     const top=r.assay_results.filter(a=>a.toxic).sort((a,b)=>b.probability-a.probability)[0];
     const row=document.createElement('tr');
+    row.className='fu';
+    row.style.animationDelay=`${index*45}ms`;
     row.innerHTML=`
       <td>${(r.smiles||'').substring(0,40)}${r.smiles&&r.smiles.length>40?'...':''}</td>
       <td><span class="risk-pill ${r.overall_risk}" style="font-size:10px;padding:3px 12px">${r.overall_risk.toUpperCase()}</span></td>
@@ -1494,6 +1623,7 @@ function renderBatch(data){
     tbody.appendChild(row);
   });
   document.getElementById('batch-res').style.display='block';
+  retriggerAnimation(document.getElementById('batch-res'));
   resetDrop();
 }
 

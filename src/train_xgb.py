@@ -13,6 +13,7 @@ Saves to:
   models/xgb_results.csv        — per-task AUC / F1 / AUPRC metrics
 """
 
+import os
 import sys
 import json
 import warnings
@@ -20,6 +21,11 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Dict, Tuple
+
+_CACHE_ROOT = Path(os.environ.setdefault("XDG_CACHE_HOME", "/tmp/codecure-cache"))
+_MPLCONFIGDIR = Path(os.environ.setdefault("MPLCONFIGDIR", "/tmp/codecure-mplconfig"))
+_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+_MPLCONFIGDIR.mkdir(parents=True, exist_ok=True)
 
 import joblib
 from tqdm import tqdm

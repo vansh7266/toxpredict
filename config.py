@@ -73,10 +73,10 @@ XGB_PARAMS = {
 
 # ── GNN hyperparameters ───────────────────────────────────────────────────────
 GNN_PARAMS = {
-    "in_channels":      44,       # atom feature dim (defined in features.py)
+    "in_channels":      40,       # atom feature dim (defined in features.py)
     "hidden_channels":  200,
     "out_channels":     len(TOX21_TASKS),
-    "edge_dim":         11,       # bond feature dim
+    "edge_dim":         12,       # bond feature dim
     "num_layers":       6,
     "num_timesteps":    2,
     "dropout":          0.2,

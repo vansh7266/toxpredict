@@ -9,8 +9,8 @@ Pipeline A — for XGBoost (tabular features)
   - Combined into a single (n_samples, 2248) feature matrix
 
 Pipeline B — for AttentiveFP GNN (graph features)
-  - Atoms  →  node feature vectors  [44-dim]
-  - Bonds  →  edge feature vectors  [11-dim]
+  - Atoms  →  node feature vectors  [40-dim]
+  - Bonds  →  edge feature vectors  [12-dim]
   - Returns PyTorch Geometric Data objects ready for DataLoader
 """
 
@@ -70,14 +70,14 @@ ATOM_FEATURE_DIM = (
     + len(HYBRIDIZATION_LIST)+1 # hybridization
     + 1                         # aromaticity flag
     + 1                         # ring membership flag
-)   # = 44
+)   # = 40
 
 BOND_FEATURE_DIM = (
     len(BOND_TYPE_LIST) + 1     # bond type
     + 1                         # conjugated flag
     + 1                         # in-ring flag
     + len(BOND_STEREO_LIST) + 1 # stereo
-)   # = 11
+)   # = 12
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -244,7 +244,7 @@ def get_feature_names() -> List[str]:
 
 def atom_features(atom) -> List[float]:
     """
-    44-dimensional feature vector for a single RDKit atom.
+    40-dimensional feature vector for a single RDKit atom.
 
     Features (in order):
       - One-hot: atomic number    (12 + 1 other = 13)
@@ -254,7 +254,7 @@ def atom_features(atom) -> List[float]:
       - One-hot: hybridization    (5  + 1 other =  6)
       - Binary:  is aromatic      (1)
       - Binary:  is in ring       (1)
-    Total = 13+7+6+6+6+1+1 = 40... adjusted to 44 with padding
+    Total = 13+7+6+6+6+1+1 = 40
     """
     return (
         _one_hot(atom.GetAtomicNum(),      ATOM_LIST)
@@ -269,14 +269,14 @@ def atom_features(atom) -> List[float]:
 
 def bond_features(bond) -> List[float]:
     """
-    11-dimensional feature vector for a single RDKit bond.
+    12-dimensional feature vector for a single RDKit bond.
 
     Features (in order):
       - One-hot: bond type     (4 + 1 other = 5)
       - Binary:  conjugated    (1)
       - Binary:  in ring       (1)
       - One-hot: stereo        (4 + 1 other = 5)  [not counted wrong]
-    Total = 5+1+1+5 = 12  -> trimmed/adjusted to 11
+    Total = 5+1+1+5 = 12
     """
     return (
         _one_hot(bond.GetBondType(), BOND_TYPE_LIST)
@@ -315,7 +315,7 @@ def smiles_to_graph(
 
     # ── Node (atom) features ─────────────────────────────────────────
     atom_feats = [atom_features(a) for a in mol.GetAtoms()]
-    x = torch.tensor(atom_feats, dtype=torch.float)  # (n_atoms, 44)
+    x = torch.tensor(atom_feats, dtype=torch.float)  # (n_atoms, 40)
 
     # ── Edge (bond) features  — undirected so add both directions ────
     edge_indices = []

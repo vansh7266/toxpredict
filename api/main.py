@@ -14,6 +14,7 @@ Run with:
   uvicorn api.main:app --reload --port 8000
 """
 
+import os
 import sys
 import json
 import numpy as np
@@ -26,6 +27,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
 _ROOT = Path(__file__).resolve().parent.parent
+_CACHE_ROOT = Path(os.environ.setdefault("XDG_CACHE_HOME", "/tmp/codecure-cache"))
+_MPLCONFIGDIR = Path(os.environ.setdefault("MPLCONFIGDIR", "/tmp/codecure-mplconfig"))
+_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+_MPLCONFIGDIR.mkdir(parents=True, exist_ok=True)
 sys.path.append(str(_ROOT))
 sys.path.append(str(_ROOT / "src"))
 from config import (
@@ -142,8 +147,10 @@ def _load_gnn():
 async def lifespan(app: FastAPI):
     """Load models on startup. Nothing to clean up on shutdown."""
     logger.info("Starting ToxPredict API — loading models...")
-    _load_xgb()
+    # Loading the PyTorch stack first avoids a local startup hang that can
+    # happen when XGBoost is initialised before the GNN model.
     _load_gnn()
+    _load_xgb()
     logger.info("Models ready. API is live.")
     yield
     logger.info("Shutting down ToxPredict API.")
@@ -159,7 +166,7 @@ app = FastAPI(
     description = (
         "Drug toxicity prediction across 12 Tox21 assay targets. "
         "Supports XGBoost (with SHAP explainability) and "
-        "AttentiveFP GNN (with atom-level attention heatmaps)."
+        "AttentiveFP GNN (with atom-level importance heatmaps)."
     ),
     lifespan    = lifespan,
 )
@@ -305,10 +312,12 @@ def _predict_with_xgb(smiles: str) -> PredictResponse:
 @app.get("/health", response_model=HealthResponse, tags=["Meta"])
 def health():
     """Check API status and confirm which models are loaded."""
+    xgb_loaded = registry.xgb_models is not None
+    gnn_loaded = registry.gnn_model is not None
     return HealthResponse(
-        status     = "ok",
-        xgb_loaded = registry.xgb_models is not None,
-        gnn_loaded = registry.gnn_model  is not None,
+        status     = "ok" if xgb_loaded and gnn_loaded else "degraded",
+        xgb_loaded = xgb_loaded,
+        gnn_loaded = gnn_loaded,
         n_tasks    = len(TOX21_TASKS),
     )
 
@@ -346,7 +355,7 @@ def predict(req: PredictRequest):
     """
     Predict toxicity for a single SMILES string.
 
-    - model='gnn'  → AttentiveFP GNN with atom attention heatmap
+    - model='gnn'  → AttentiveFP GNN with atom importance heatmap
     - model='xgb'  → XGBoost with SHAP feature importance
 
     Returns probabilities for all 12 Tox21 assay targets.
